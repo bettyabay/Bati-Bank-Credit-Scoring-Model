@@ -2,6 +2,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import os
+import numpy as np
 
 class EDA:
     def __init__(self, file_path):
@@ -127,42 +128,84 @@ class EDA:
         else:
             print("No missing values in the dataset.")
 
-    def detect_outliers(self, method='IQR'):
-        numerical_cols = self.data.select_dtypes(include=['float64', 'int64']).columns
-        outliers_dict = {}
-
-        for col in numerical_cols:
-            if method == 'IQR':
-                Q1 = self.data[col].quantile(0.25)
-                Q3 = self.data[col].quantile(0.75)
-                IQR = Q3 - Q1
-                lower_bound = Q1 - 1.5 * IQR
-                upper_bound = Q3 + 1.5 * IQR
-                outliers = self.data[(self.data[col] < lower_bound) | (self.data[col] > upper_bound)]
-                outliers_dict[col] = outliers
-                print(f"{len(outliers)} outliers detected in {col} using IQR method.")
-        
-        return outliers_dict
-
-    def handle_outliers(self, method='remove'):
-        if method not in ['remove', 'replace']:
-            raise ValueError("Method must be 'remove' or 'replace'.")
-
-        numerical_cols = self.data.select_dtypes(include=['float64', 'int64']).columns
-        
-        for col in numerical_cols:
-            Q1 = self.data[col].quantile(0.25)
-            Q3 = self.data[col].quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
+    def detect_outliers(self, method='IQR'): 
+            numerical_cols = self.data.select_dtypes(include=['float64', 'int64']).columns
+            outliers_dict = {}
             
-            if method == 'remove':
-                initial_count = self.data.shape[0]
-                self.data = self.data[(self.data[col] >= lower_bound) & (self.data[col] <= upper_bound)]
-                final_count = self.data.shape[0]
-                print(f"Removed {initial_count - final_count} outliers from {col}.")
-            elif method == 'replace':
-                self.data[col] = self.data[col].mask(self.data[col] < lower_bound, lower_bound)
-                self.data[col] = self.data[col].mask(self.data[col] > upper_bound, upper_bound)
-                print(f"Replaced outliers in {col} with bounds.")
+            # Create subplots for box plots
+            num_plots = len(numerical_cols)
+            fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(18, 10), squeeze=False)  # Adjust size as needed
+            axs = axs.flatten()  # Flatten the array for easy iteration
+
+            for idx, col in enumerate(numerical_cols):
+                if method == 'IQR':
+                    Q1 = self.data[col].quantile(0.25)
+                    Q3 = self.data[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    # Detect outliers
+                    outliers = self.data[(self.data[col] < lower_bound) | (self.data[col] > upper_bound)]
+                    outliers_dict[col] = outliers
+                    
+                    # Calculate percentage of outliers
+                    total_points = len(self.data[col])
+                    num_outliers = len(outliers)
+                    percent_outliers = (num_outliers / total_points) * 100
+                    
+                    print(f"{num_outliers} outliers detected in {col} using IQR method. ({percent_outliers:.2f}% of data)")
+                
+                # Create a box plot for the current column
+                sns.boxplot(data=self.data, y=col, ax=axs[idx])
+                axs[idx].set_title(f'Box Plot of {col}', fontsize=16)
+                axs[idx].set_ylabel(col, fontsize=12)
+                axs[idx].grid(True)  # Add gridlines
+
+            # Hide any unused subplots if there are less than 6 plots
+            for i in range(num_plots, len(axs)):
+                fig.delaxes(axs.flatten()[i])
+            
+            plt.tight_layout()
+            plt.savefig("../Images/outlier_detection_box_plots.png")  # Save all subplots as one image
+            plt.show()
+            
+            return outliers_dict
+
+    def handle_outliers(self, save_path="../Data/clean_data.csv"):
+        numerical_cols = self.data.select_dtypes(include=['float64', 'int64']).columns
+        
+        for col in numerical_cols:
+            if col == 'Amount':
+                # Log transformation for Amount to reduce skew
+                print(f"Applying log transformation to {col}")
+                self.data[col] = np.log1p(self.data[col])  # log1p to handle zeros as well
+                
+            elif col == 'Value':
+                # Winsorization for Value (cap extreme values)
+                print(f"Applying Winsorization to {col}")
+                lower_percentile = self.data[col].quantile(0.05)
+                upper_percentile = self.data[col].quantile(0.95)
+                self.data[col] = np.clip(self.data[col], lower_percentile, upper_percentile)
+            
+            elif col == 'PricingStrategy':
+                # Binning PricingStrategy to group outliers into categories
+                print(f"Applying binning to {col}")
+                self.data[col] = pd.cut(self.data[col], bins=[-np.inf, 1, 2, np.inf], labels=['Low', 'Medium', 'High'])
+            
+            elif col == 'FraudResult':
+                # No outlier removal for FraudResult, retain as-is
+                print(f"Retaining outliers in {col}, as they are crucial for analysis")
+            
+            else:
+                # Default method if needed for other columns
+                print(f"Handling outliers for {col} using default method (Winsorization)")
+                lower_percentile = self.data[col].quantile(0.05)
+                upper_percentile = self.data[col].quantile(0.95)
+                self.data[col] = np.clip(self.data[col], lower_percentile, upper_percentile)
+
+        # Save the cleaned data to a CSV file
+        self.data.to_csv(save_path, index=False)
+        print(f"Cleaned data saved to {save_path}")
+        
+        return self.data
